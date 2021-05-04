@@ -49,7 +49,9 @@ def main():
 
     orders = get_orders(last_transaction_id, address)
     rows = format_csv(orders)
-    print(rows)
+    with open("data.csv", "w+") as my_csv:
+        csvWriter = csv.writer(my_csv, delimiter=',')
+        csvWriter.writerows(rows)
 
 
 if __name__ == "__main__":
