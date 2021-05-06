@@ -3,23 +3,16 @@ import csv
 import requests
 import pytz
 from datetime import datetime
+import urllib.parse
+import sys
 
 
 def get_orders(last_transaction_id: int, address: str) -> list:
-    # TODO: Handle cursors.
-    imx_url = "https://api.x.immutable.com/v1/orders"
-    response = requests.get(imx_url + "?user=" +
-                            address + "&status=filled&direction=asc").json()
-    order_json = response["result"]
-    valid_order_json = list(filter(
-        lambda order: order["order_id"] >= last_transaction_id, order_json))
+    filtered_orders = get_order_json(last_transaction_id, address)
     orders = []
     wei_amount = 1000000000000000000
-    for order in valid_order_json:
-        is_buy_order = order["buy"]["type"] == "ERC721"
-        if not is_buy_order:
-            continue
-        # Disregarding time for now.
+    for order in filtered_orders:
+        # Part after the . is Z value, so I am just disregarding it.
         date = convert_utc_to_est(order["timestamp"].split(".")[0])
         coin_gecko_date = order["timestamp"].split("T")[0]
         eth_amount = int(order["amount_sold"]) / wei_amount
@@ -30,11 +23,34 @@ def get_orders(last_transaction_id: int, address: str) -> list:
     return orders
 
 
-def convert_utc_to_est(utc_datetime) -> str:
+def get_order_json(last_transaction_id: int, address: str) -> dict:
+    imx_url = "https://api.x.immutable.com/v1/orders?"
+    raw_orders = []
+    cursor = ""
+    firstTime = True
+    while firstTime or len(cursor) > 0:
+        firstTime = False
+        parameters = {"user": address, "status": "filled",
+                      "direction": "asc"}
+        if len(cursor) > 0:
+            parameters["cursor"] = cursor
+        response = requests.get(
+            imx_url + urllib.parse.urlencode(parameters)).json()
+        raw_orders += response["result"]
+        cursor = response["cursor"]
+
+    filtered_orders = list(filter(
+        lambda order: order["buy"]["type"] == "ERC721" and order["order_id"] >= last_transaction_id,
+        raw_orders))
+    return filtered_orders
+
+
+def convert_utc_to_est(utc_datetime: str) -> str:
     est = pytz.timezone('US/Eastern')
     utc = pytz.utc
     fmt = '%m/%d/%Y %H:%M:%S'
     d = datetime.strptime(utc_datetime, "%Y-%m-%dT%H:%M:%S")
+    # This was done as I couldn't figure out another way to add tzinfo to d.
     d = datetime(d.year, d.month, d.day, d.hour,
                  d.minute, d.second, tzinfo=utc)
     return str(d.astimezone(utc).astimezone(est).strftime(fmt))
@@ -52,13 +68,24 @@ def format_csv(orders: list):
         date, card_name, eth_amount, eth_price = order
         return [date, "imx buy", "$" + str(eth_price), 0,
                 0, card_name, "M", eth_amount]
-    rows = list(map(format_order, orders))
+    header = ["Buy Date", "Type", "ETH Buy Unit Price",
+              "Buy Fee", "Amount", "Card Name", "Quality", "Cost Basis"]
+    rows = [header] + list(map(format_order, orders))
     return rows
 
 
 def main():
-    # TODO: add this as a console parameter
-    last_transaction_id = 192845
+    n = len(sys.argv)
+    if n != 2:
+        print("Error, must have exactly one argument: Last Transaction Id.")
+        return
+    last_transaction_id = -1
+    try:
+        last_transaction_id = int(sys.argv[1])
+    except:
+        print("Error: Last Transaction Id must be an integer")
+        return
+
     address = "0x1f4b9d5B19257e1496B907ef7b9284536f050499"
 
     orders = get_orders(last_transaction_id, address)
